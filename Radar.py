@@ -10,6 +10,9 @@ import plotly.graph_objects as go   # pip install plotly
 # Internal libraries
 from StationaryObject import StationaryObject
 
+speedInMetersPerSecond = 10
+pollingRateInHz = 2
+
 class Radar:
 
     PAST = 0
@@ -25,6 +28,13 @@ class Radar:
     EIGHTH_CIRCLE = int(FULL_CIRCLE / 8)
 
     def __init__(self, maxRadius: int = 300, port: str = '/dev/ttyUSB0', mode: str = 'TESTING'):
+        """Initialize the Radar object.
+
+        Args:
+            maxRadius (int, optional): Maximum range of the RADAR in meters. Defaults to 300.
+            port (str, optional): Serial port for communication. Defaults to '/dev/ttyUSB0'.
+            mode (str, optional): Operating mode ('TESTING' or 'PRODUCTION'). Defaults to 'TESTING'.
+        """
 
         if mode == "TESTING":
             self.mode = mode
@@ -106,12 +116,30 @@ class Radar:
 
 
     def cartesian_to_polar(x, y):
+        """ Convert Cartesian coordinates to polar coordinates.
+
+        Args:
+            x (float): The x-coordinate.
+            y (float): The y-coordinate.
+
+        Returns:
+            tuple: A tuple containing the radius and angle in degrees.
+        """
         r = math.sqrt(x**2 + y**2)
         theta = math.degrees(math.atan2(y, x))
         return (r, theta)
 
 
     def polar_to_cartesian(r, thetaDegrees):
+        """ Convert polar coordinates to Cartesian coordinates.
+
+        Args:
+            r (float): The radius.
+            thetaDegrees (float): The angle in degrees.
+
+        Returns:
+            tuple: A tuple containing the x and y coordinates.
+        """
         thetaRadians = math.radians(thetaDegrees)
         x = r * math.cos(thetaRadians)
         y = r * math.sin(thetaRadians)
@@ -125,29 +153,30 @@ class Radar:
             velocity (int): The velocity of the moving RADAR module
             pollRate (int): The rate at which the data is polled in Hertz
         """
-        stationaryObjects = []
+
         radiusMoved = velocity * pollRate
         for r in range(1, self.maxRadius - radiusMoved):
             for t in range(Radar.FULL_CIRCLE):
-                if self.dataTimeSliceCurrent[r, t] == self.dataTimeSlicePast[(r+radiusMoved), t]:
+                if self.dataTimeSliceCurrent[r, t] and self.dataTimeSlicePast[(r+radiusMoved), t]:
                     self.dataTimeSliceStationary[r, t] = True
-                    #obj = StationaryObject
-                    #obj.add_point(r, t)
-                    #stationaryObjects.append(obj)
 
-        #return stationaryObjects
 
 
     def scan(self, currentPlotContainer):
+        global speedInMetersPerSecond, pollingRateInHz
+
         print("Scanning...")
 
         self.reset_current_radar_database()
 
         if self.mode == "TESTING":
-            self.generate_random_data(100)
-            #self.serialConnection.write(b'1_1111_0001_0101_1010_1010_1010_1010_1010_1010_1000_1111\n')   # 45 bits for 45 degrees = Radar.EIGHTH_CIRCLE
-            #data = self.serialConnection.read(Radar.EIGHTH_CIRCLE)
-            #print(f"Data:{data}")
+            #self.generate_random_data(100)
+            self.manual_update()
+            self.serialConnection.write(b'1_1111_0001_0101_1010_1010_1010_1010_1010_1010_1000_1111')   # 45 bits for 45 degrees = Radar.EIGHTH_CIRCLE
+            data = self.serialConnection.read(Radar.EIGHTH_CIRCLE)
+            dataStr = data.decode('utf-8').replace('_', '')
+            binary = bin(int(dataStr))
+            print(f"Data: {data} = {binary})")
         else:
             self.generate_random_data(100)
             #data = self.serialConnection.read(Radar.FULL_CIRCLE)
@@ -165,12 +194,34 @@ class Radar:
         currentPlotContainer.figure = self.GUI("CURRENT")
         currentPlotContainer.update()
 
+        self.stationaryObjects = []
+        self.find_stationary_points(speedInMetersPerSecond, pollingRateInHz)
+        #print(f"Stationary Data: {self.dataTimeSliceStationary}")
+        stationaryGroupedPoints = self.group_points(self.dataTimeSliceStationary)
+        print(f"Group ID Data: {stationaryGroupedPoints}")
+        groupId = 0
+        if len(stationaryGroupedPoints) > 0:
+            for i in range(stationaryGroupedPoints[-1][Radar.GROUP_ID]+1):
+                obj = StationaryObject()
+                for point in stationaryGroupedPoints:
+                    if point[Radar.GROUP_ID] == groupId:
+                        obj.add_point(point[Radar.RADIUS], point[Radar.THETA])
+                obj.define_object_outer_polyline()
+                groupId += 1
+                self.stationaryObjects.append(obj)
+
+        print("Stationary Objects:", self.stationaryObjects)
+        stationaryPlotContainer.figure = self.GUI("STATIONARY OBJECTS")
+        stationaryPlotContainer.update()
+
 
     def next_scan(self, currentPlotContainer, pastPlotContainer):
-        self.find_stationary_points(10, 2)
-        self.group_points(self.dataTimeSliceStationary)
+        """ Lambda function to update the plot containers with new Plotly figures based on the current and past RADAR data.
 
-        # Update the plot containers with new Plotly figures
+        Args:
+            currentPlotContainer (PlotContainer): The container for the current plot.
+            pastPlotContainer (PlotContainer): The container for the past plot.
+        """
         self.dataTimeSlicePast = self.dataTimeSliceCurrent.copy()
         pastPlotContainer.figure = self.GUI("PAST")
         pastPlotContainer.update()
@@ -179,10 +230,19 @@ class Radar:
 
 
     def reset_current_radar_database(self):
+        """ Reset the current RADAR database."""
         self.dataTimeSliceCurrent = np.zeros((self.maxRadius, Radar.FULL_CIRCLE), dtype=bool)
 
 
     def update_radar_database(self, data: bool, r: int, theta: int, timeSlice):
+        """ Update the RADAR database with new data.
+
+        Args:
+            data (bool): The new data to be stored.
+            r (int): The radius coordinate.
+            theta (int): The angle coordinate.
+            timeSlice (int): The time slice to update.
+        """
         if timeSlice == Radar.PAST:
             self.dataTimeSlicePast[r, theta] = data
         elif timeSlice == Radar.CURRENT:
@@ -194,14 +254,20 @@ class Radar:
 
 
     def generate_random_data(self, numOfPoints, theta: int = FULL_CIRCLE):
+        """Generate random data for the radar.
+
+        Args:
+            numOfPoints (int): The number of points to generate.
+            thetaMax (int): The maxium angle coordinate.
+        """
         for _ in range(numOfPoints):
             self.update_radar_database(True, np.random.randint(1, self.maxRadius), np.random.randint(0, Radar.FULL_CIRCLE), Radar.CURRENT)
 
 
     def manual_update(self):
         self.update_radar_database(True, 60, 0, Radar.PAST)
-        self.update_radar_database(True, 50, 0, Radar.CURRENT)
-        self.update_radar_database(True, 100, 0, Radar.CURRENT)
+        self.update_radar_database(True, 40, 0, Radar.CURRENT)
+        self.update_radar_database(True, 80, 0, Radar.CURRENT)
         self.update_radar_database(True, 100, 359, Radar.CURRENT)
         self.update_radar_database(True, 100, 1, Radar.CURRENT)
         self.update_radar_database(True, 100, 2, Radar.CURRENT)
@@ -210,7 +276,6 @@ class Radar:
         self.update_radar_database(True, 102, 4, Radar.CURRENT)
         self.update_radar_database(True, 108, 5, Radar.CURRENT)
         self.update_radar_database(True, 103, 4, Radar.CURRENT)
-        self.update_radar_database(True, 40, 0, Radar.NEXT)
 
 
     def create_plot_points(self, data):
@@ -225,7 +290,8 @@ class Radar:
         radiusPlotPoints = []
         thetaPlotPoints = []
 
-        #data = self.group_points(dataInput)
+        #dataGrouped = self.group_points(data)
+        #print(f"Data with Grouped Points: {dataGrouped}")
 
         for r in range(self.maxRadius):
             for t in range(Radar.FULL_CIRCLE):
@@ -237,6 +303,14 @@ class Radar:
 
 
     def GUI(self, timeSlice: str):
+        """Create a Plotly figure for the GUI using input RADAR data.
+
+        Args:
+            timeSlice (str): The time slice to display.
+
+        Returns:
+            go.Figure: The Plotly figure.
+        """
 
         if timeSlice == "CURRENT":
             radiusList, thetaList = self.create_plot_points(self.dataTimeSliceCurrent)
@@ -260,34 +334,41 @@ class Radar:
             polar=dict(
                 bgcolor="#4d4d4d",
                 radialaxis=dict(visible=True, range=[0, self.maxRadius], tickvals=[100, 200]),
-                angularaxis=dict(rotation=90, direction="clockwise",)   # rotate CCW
+                angularaxis=dict(rotation=90, direction="clockwise")  # Set numbering direction to clockwise like a compass and rotate 90 degree counterclockwise
             ),
-            font=dict(color="white"),
-            #showlegend=True
+            font=dict(color="white")
         )
 
         return figure
 
 
     def toggle_GUI(value):
+        """ Toggle the visibility of the GUI plots based on the selected time slice.
+
+        Args:
+            value (str): The selected time slice ("CURRENT", "PAST", or "STATIONARY OBJECTS").
+        """
         if value == "CURRENT":
             pastPlotContainer.visible = False
+            stationaryPlotContainer.visible = False
             currentPlotContainer.visible = True
         elif value == "PAST":
             currentPlotContainer.visible = False
+            stationaryPlotContainer.visible = False
             pastPlotContainer.visible = True
         elif value == "STATIONARY OBJECTS":
             currentPlotContainer.visible = False
             pastPlotContainer.visible = False
+            stationaryPlotContainer.visible = True
         else:
-            raise ValueError("Invalid time slice")
+            raise ValueError("DEV ERROR: Invalid time slice radio button selected!")
 
 
 if __name__ in {"__main__", "__mp_main__"}:
 
     EP3 = Radar(300, '/dev/ttyUSB0', 'TESTING')
-    EP3.generate_random_data(100)
-    EP3.update_radar_database(True, 60, 0, Radar.PAST)
+    #EP3.generate_random_data(100)
+    EP3.manual_update()
 
     with ui.row().classes('justify-center w-full'):
         currentPlotContainer = ui.plotly(EP3.GUI("CURRENT")).classes('w-[600px] h-[525px]')
@@ -296,7 +377,7 @@ if __name__ in {"__main__", "__mp_main__"}:
         pastPlotContainer.visible = False
         stationaryPlotContainer.visible = False
 
-    ui.button("Perform new RADAR scan", icon='radar', on_click= lambda: EP3.next_scan(currentPlotContainer, pastPlotContainer)).props('color=orange').classes('justify-center w-full')
+    ui.button("PERFORM NEW RADAR SCAN", icon='radar', on_click= lambda: EP3.next_scan(currentPlotContainer, pastPlotContainer)).props('color=orange').classes('justify-center w-full')
     with ui.row().classes('items-center'):
         ui.label("RADAR Time Slice:")
         radioTimeSliceInput = ui.radio(["CURRENT", "PAST", "STATIONARY OBJECTS"], value="CURRENT", on_change= lambda e: Radar.toggle_GUI(e.value)).props('inline').classes('mr-2')
