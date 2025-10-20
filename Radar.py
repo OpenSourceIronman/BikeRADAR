@@ -1,19 +1,29 @@
 #!/usr/bin/python3
 
+# macOS packaging support
+#from multiprocessing import freeze_support  # noqa
+#freeze_support()                            # noqa
+
 # External libraries
-from nicegui import ui              # pip install nicegui
+from nicegui import native, ui      # pip install nicegui
 import numpy as np                  # pip install numpy
+#import threading
 import serial                       # pip install pyserial
 import math                         # pip install math
 import plotly.graph_objects as go   # pip install plotly
+import os
+from dotenv import load_dotenv
 
 # Internal libraries
 from StationaryObject import StationaryObject
 
 speedInMetersPerSecond = 10
 pollingRateInHz = 2
+objectsFound = 0
 
 class Radar:
+
+    DEBUG_STATEMENTS_ON = False
 
     PAST = 0
     CURRENT = 1
@@ -35,15 +45,23 @@ class Radar:
             port (str, optional): Serial port for communication. Defaults to '/dev/ttyUSB0'.
             mode (str, optional): Operating mode ('TESTING' or 'PRODUCTION'). Defaults to 'TESTING'.
         """
+        self.mode = mode
 
         if mode == "TESTING":
-            self.mode = mode
             self.serialConnection = serial.serial_for_url('loop://', timeout=1)
+            #threading.Thread(target=Radar.scan(currentPlotContainer), args=(self.serialConnection,), daemon=True).start()
         else:
-            # Initialize production serial connection with USB port at 9600 baud rate
-            self.serialConnection = serial.Serial(port, 9600)
+            try:
+                # Initialize production serial connection with USB port at 9600 baud rate
+                self.serialConnection = serial.Serial(port, 9600)
+            except serial.serialutil.SerialException as e:
+                print(f"Error initializing serial connection: {e}")
+                ui.notify("ERROR: RADAR module serial port connection failed")
+                self.serialConnection = None
 
         # Max range of the radar in meters
+        if maxRadius > 300:
+            raise ValueError("Maximum radius cannot exceed 300 meters.")
         self.maxRadius = maxRadius
 
         # Create a 2D array (len(radius) x len(theta)) filled with False
@@ -130,19 +148,20 @@ class Radar:
         return (r, theta)
 
 
-    def polar_to_cartesian(r, thetaDegrees):
+    def polar_to_cartesian(r: int, thetaDegrees: int) -> tuple:
         """ Convert polar coordinates to Cartesian coordinates.
 
         Args:
-            r (float): The radius.
-            thetaDegrees (float): The angle in degrees.
+            r (int): The radius.
+            thetaDegrees (int): The angle in degrees.
 
         Returns:
-            tuple: A tuple containing the x and y coordinates.
+            tuple: A tuple containing the x and y coordinates rounded to three decimal places.
         """
         thetaRadians = math.radians(thetaDegrees)
-        x = r * math.cos(thetaRadians)
-        y = r * math.sin(thetaRadians)
+        x = round(r * math.cos(thetaRadians), 3)
+        y = round(r * math.sin(thetaRadians), 3)
+
         return (x, y)
 
 
@@ -150,19 +169,31 @@ class Radar:
         """" Determine if consecutive time slices contain stationary objects.
 
         Args:
-            velocity (int): The velocity of the moving RADAR module
-            pollRate (int): The rate at which the data is polled in Hertz
+            velocity (int): The velocity of the moving RADAR module moving towards 270 degrees (down in GUI).
+            pollRate (int): The rate at which the data is polled in Hertz.
         """
 
-        radiusMoved = velocity * pollRate
-        for r in range(1, self.maxRadius - radiusMoved):
-            for t in range(Radar.FULL_CIRCLE):
-                if self.dataTimeSliceCurrent[r, t] and self.dataTimeSlicePast[(r+radiusMoved), t]:
-                    self.dataTimeSliceStationary[r, t] = True
+        distanceMoved = velocity * pollRate
+        for r1 in range(1, self.maxRadius - distanceMoved):
+            for t1 in range(Radar.FULL_CIRCLE):
+                x1, y1 = Radar.polar_to_cartesian(r1, t1)
+                y2 = y1 - distanceMoved
+                r2, t2 = Radar.cartesian_to_polar(x1, y2)
 
+                if self.dataTimeSliceCurrent[r1, t1] and self.dataTimeSlicePast[int(r2), int(t2)]:
+                    print(f"(r1={r1}, t1={t1}) -> (r2={int(r2)}, t2={int(t2)}) = (x1={x1}, y2={y2})")
+                    self.dataTimeSliceStationary[r1, t1] = True
 
 
     def scan(self, currentPlotContainer):
+        """
+
+        Args:
+            currentPlotContainer (PlotContainer): The current plot container
+
+        Returns:
+            None
+        """
         global speedInMetersPerSecond, pollingRateInHz
 
         print("Scanning...")
@@ -170,26 +201,20 @@ class Radar:
         self.reset_current_radar_database()
 
         if self.mode == "TESTING":
-            #self.generate_random_data(100)
-            self.manual_update()
-            self.serialConnection.write(b'1_1111_0001_0101_1010_1010_1010_1010_1010_1010_1000_1111')   # 45 bits for 45 degrees = Radar.EIGHTH_CIRCLE
-            data = self.serialConnection.read(Radar.EIGHTH_CIRCLE)
-            dataStr = data.decode('utf-8').replace('_', '')
-            binary = bin(int(dataStr))
-            print(f"Data: {data} = {binary})")
+            if (Radar.DEBUG_STATEMENTS_ON): print(self.serial_test())
         else:
-            self.generate_random_data(100)
-            #data = self.serialConnection.read(Radar.FULL_CIRCLE)
+            #self.generate_random_data(100)
+            self.serial_scan_test()
+            data = self.serialConnection.read(self.maxRadius * Radar.FULL_CIRCLE)
 
-        #i = 0
-        #for r in range(self.maxRadius):
-        #    for t in range(Radar.FULL_CIRCLE):
-        #        bit = data[i:i+1]
-        #        #print(bit)
-        #        if bit:
-        #            self.update_radar_database(True, r, t, Radar.CURRENT)
-        #        else:
-        #            self.update_radar_database(False, r, t, Radar.CURRENT)
+        i = 0
+        for r in range(self.maxRadius):
+            for t in range(Radar.FULL_CIRCLE):
+                if i >= len(data):
+                    break  # prevent index error
+                bit = data[i:i+1]
+                i += 1
+                self.update_radar_database(bit == b'1', r, t, Radar.CURRENT)
 
         currentPlotContainer.figure = self.GUI("CURRENT")
         currentPlotContainer.update()
@@ -198,9 +223,9 @@ class Radar:
         self.find_stationary_points(speedInMetersPerSecond, pollingRateInHz)
         #print(f"Stationary Data: {self.dataTimeSliceStationary}")
         stationaryGroupedPoints = self.group_points(self.dataTimeSliceStationary)
-        print(f"Group ID Data: {stationaryGroupedPoints}")
         groupId = 0
         if len(stationaryGroupedPoints) > 0:
+            objectsFoundLabel.set_text(f"Stationary Objects Found: {len(stationaryGroupedPoints)} ........ Group ID Data: {stationaryGroupedPoints}")
             for i in range(stationaryGroupedPoints[-1][Radar.GROUP_ID]+1):
                 obj = StationaryObject()
                 for point in stationaryGroupedPoints:
@@ -213,6 +238,25 @@ class Radar:
         print("Stationary Objects:", self.stationaryObjects)
         stationaryPlotContainer.figure = self.GUI("STATIONARY OBJECTS")
         stationaryPlotContainer.update()
+
+    def serial_scan_test(self):
+
+        for radius in range(1, self.maxRadius):
+            radiusNumOfBytes = self.serialConnection.write(format(radius, '09b').encode()) # 9-bit binary with leading zeros to create b'000000001' to b'100101100' # Radius = 300
+            for _ in range(2):
+                numOfBytes = [0, 0, 0, 0]
+                numOfBytes[0] = self.serialConnection.write(b'111110001010110101010101010101010101010001111')   # 45 bits for 45 degrees = Radar.EIGHTH_CIRCLE
+                numOfBytes[1] = self.serialConnection.write(b'111110001010110101010101010101010101010001111')   # 45 bits for 45 degrees = Radar.EIGHTH_CIRCLE
+                numOfBytes[2] = self.serialConnection.write(b'111110001010110101010101010101010101010001111')   # 45 bits for 45 degrees = Radar.EIGHTH_CIRCLE
+                numOfBytes[3] = self.serialConnection.write(b'111110001010110101010101010101010101010001111')   # 45 bits for 45 degrees = Radar.EIGHTH_CIRCLE
+
+        for radius in range(1, self.maxRadius):
+            radiusNumOfBytes = self.serialConnection.read(radiusNumOfBytes)
+            if sum(numOfBytes) == Radar.FULL_CIRCLE:
+                thetaBinary = self.serialConnection.read(Radar.FULL_CIRCLE)
+                return thetaBinary
+            else:
+                raise ValueError("Invalid number of bytes received")
 
 
     def next_scan(self, currentPlotContainer, pastPlotContainer):
@@ -230,18 +274,20 @@ class Radar:
 
 
     def reset_current_radar_database(self):
-        """ Reset the current RADAR database."""
+        """ Reset the current time slice RADAR Numpy array to False
+
+        """
         self.dataTimeSliceCurrent = np.zeros((self.maxRadius, Radar.FULL_CIRCLE), dtype=bool)
 
 
     def update_radar_database(self, data: bool, r: int, theta: int, timeSlice):
-        """ Update the RADAR database with new data.
+        """ Update the RADAR Numpy array with new data.
 
         Args:
-            data (bool): The new data to be stored.
-            r (int): The radius coordinate.
-            theta (int): The angle coordinate.
-            timeSlice (int): The time slice to update.
+            data (bool): True if RADAR object is present, False otherwise
+            r (int): Radius coordinate (in meters) to update
+            theta (int): Angle coordinate (in degrees) to update
+            timeSlice: The time slice to update
         """
         if timeSlice == Radar.PAST:
             self.dataTimeSlicePast[r, theta] = data
@@ -253,12 +299,12 @@ class Radar:
             raise ValueError("Invalid time slice")
 
 
-    def generate_random_data(self, numOfPoints, theta: int = FULL_CIRCLE):
-        """Generate random data for the radar.
+    def generate_random_data(self, numOfPoints, thetaMax: int = FULL_CIRCLE):
+        """ Generate random data for the current time slice.
 
         Args:
             numOfPoints (int): The number of points to generate.
-            thetaMax (int): The maxium angle coordinate.
+            thetaMax (int): The maximum angle coordinate (in degrees).
         """
         for _ in range(numOfPoints):
             self.update_radar_database(True, np.random.randint(1, self.maxRadius), np.random.randint(0, Radar.FULL_CIRCLE), Radar.CURRENT)
@@ -266,7 +312,9 @@ class Radar:
 
     def manual_update(self):
         self.update_radar_database(True, 60, 0, Radar.PAST)
+        self.update_radar_database(True, 60, 3, Radar.PAST)
         self.update_radar_database(True, 40, 0, Radar.CURRENT)
+        self.update_radar_database(True, 40, 3, Radar.CURRENT)
         self.update_radar_database(True, 80, 0, Radar.CURRENT)
         self.update_radar_database(True, 100, 359, Radar.CURRENT)
         self.update_radar_database(True, 100, 1, Radar.CURRENT)
@@ -290,9 +338,6 @@ class Radar:
         radiusPlotPoints = []
         thetaPlotPoints = []
 
-        #dataGrouped = self.group_points(data)
-        #print(f"Data with Grouped Points: {dataGrouped}")
-
         for r in range(self.maxRadius):
             for t in range(Radar.FULL_CIRCLE):
                 if data[r, t]:
@@ -303,7 +348,7 @@ class Radar:
 
 
     def GUI(self, timeSlice: str):
-        """Create a Plotly figure for the GUI using input RADAR data.
+        """ Create a Plotly figure for the GUI using input RADAR.py object data.
 
         Args:
             timeSlice (str): The time slice to display.
@@ -334,7 +379,7 @@ class Radar:
             polar=dict(
                 bgcolor="#4d4d4d",
                 radialaxis=dict(visible=True, range=[0, self.maxRadius], tickvals=[100, 200]),
-                angularaxis=dict(rotation=90, direction="clockwise")  # Set numbering direction to clockwise like a compass and rotate 90 degree counterclockwise
+                #angularaxis=dict(rotation=90, direction="clockwise")  # Set numbering direction to clockwise like a compass and rotate 90 degree counterclockwise
             ),
             font=dict(color="white")
         )
@@ -342,8 +387,8 @@ class Radar:
         return figure
 
 
-    def toggle_GUI(value):
-        """ Toggle the visibility of the GUI plots based on the selected time slice.
+    def toggle_GUI(value: str):
+        """ Toggle the visibility of the GUI plots based on the time slice selected via Radio Button.
 
         Args:
             value (str): The selected time slice ("CURRENT", "PAST", or "STATIONARY OBJECTS").
@@ -366,7 +411,7 @@ class Radar:
 
 if __name__ in {"__main__", "__mp_main__"}:
 
-    EP3 = Radar(300, '/dev/ttyUSB0', 'TESTING')
+    EP3 = Radar(300, '/dev/ttyUSB0', 'PRODUCTION')
     #EP3.generate_random_data(100)
     EP3.manual_update()
 
@@ -381,5 +426,8 @@ if __name__ in {"__main__", "__mp_main__"}:
     with ui.row().classes('items-center'):
         ui.label("RADAR Time Slice:")
         radioTimeSliceInput = ui.radio(["CURRENT", "PAST", "STATIONARY OBJECTS"], value="CURRENT", on_change= lambda e: Radar.toggle_GUI(e.value)).props('inline').classes('mr-2')
+        objectsFoundLabel = ui.label("Stationary Objects Found: 0")
 
-    ui.run(native=True, dark=True, window_size=(660, 720), title='RADAR Data', on_air=None)
+    load_dotenv()
+    onAirKey = os.getenv("ON_AIR_TOKEN")
+    ui.run(native=True, dark=True, window_size=(660, 800), title='RADAR Data', on_air=onAirKey) #, reload=False, port=native.find_open_port())
