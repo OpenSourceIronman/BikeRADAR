@@ -3,7 +3,7 @@
 # Standard libraries
 from dataclasses import dataclass, field
 import math
-
+from Risk import Risk
 
 @dataclass
 class StationaryObject:
@@ -17,6 +17,8 @@ class StationaryObject:
 
     objectPolyline: list[list, list] = field(default_factory=list)
 
+    risk: Risk()
+
     def add_point(self, radius: int, theta: int):
         """Adds a point to the object's radius and theta lists."""
         self.radius.append(radius)
@@ -25,6 +27,7 @@ class StationaryObject:
     def define_object_outer_polyline(self):
         """Defines the outer polyline of the object."""
         self.objectPolyline = [self.radius, self.theta]
+
 
     def __str__(self) -> str:
         """Returns a string representation of the object."""

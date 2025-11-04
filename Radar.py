@@ -77,6 +77,7 @@ class Radar:
         return f"RadarPlot(dataTimeSlicePast={self.dataTimeSlicePast}, dataTimeSliceCurrent={self.dataTimeSliceCurrent}, dataTimeSliceNext={self.dataTimeSliceNext}, stationaryObjects={self.stationaryObjects})"
 
 
+
     def group_points(self, dataTimeSlice):
         """ Group points by adjacency and add a group ID for all touch points.
 
@@ -88,6 +89,7 @@ class Radar:
         pointsSortedByRadius = []
         pointsSortedByTheta = []
         groupId = 0
+
 
         # Get points from current data time slice with group ID set to 0
         for r in range(self.maxRadius):
