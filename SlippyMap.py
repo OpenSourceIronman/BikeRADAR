@@ -16,17 +16,27 @@ import math
 
 from nicegui import ui
 
+# 3rd party libraries
+from PIL import Image, ImageDraw  # pip install Pillow
+import requests
+from io import BytesIO
+
+IN = 1
+OUT = -1
 TILE_SIZE = 256
 GPS_DECIMAL_ROUNDING = 6
 
+mapCenter = (36.149727, -115.334172)
+currentZoomLevel = 8
 
 def unit_test():
+    assert tileXY_to_quadkey(16, 11772, 25701) == "0230130113311302"
     assert convert_tile_XY_to_LatLon(4, 7, 5) == (55.776573, -22.500000)
     assert convert_tile_XY_to_LatLon(10, 184, 401) == (36.315125, -115.312500)
     assert find_surrounding_tiles(36.159334,-115.152807, 10) == [(10, 183, 400), (10, 183, 401), (10, 183, 402), (10, 184, 400), (10, 184, 401), (10, 184, 402), (10, 185, 400), (10, 185, 401), (10, 185, 402)]
 
     for zoomLevel in range(0, 20):
-        x,y = get_tile_XY(36.159334, -115.152807, zoomLevel)
+        x,y = get_tile_XY(zoomLevel, 36.159334, -115.152807)
 
         s,w,n,e = tile_edges(zoomLevel, x, y)
         print("%d: %7d,%7d --> %1.6f :: %1.6f, %1.6f :: %1.6f" % (zoomLevel, x, y, s, n, w, e))
@@ -58,7 +68,7 @@ def sec(x: float) -> float:
     return 1 / math.cos(x)
 
 
-def get_tile_XY(lat: float, lon: float, zoomLevel: int) -> tuple:
+def get_tile_XY(zoomLevel: int, lat: float, lon: float) -> tuple:
     """ Calculate the tile coordinates for a given latitude, longitude, and zoom level.
 
     Args:
@@ -203,7 +213,12 @@ def tile_URL(zoomLevel, x, y, layer) -> str:
 
 
 def tileXY_to_quadkey(zoomLevel: int, x: int, y: int) -> str:
-    """Convert tile (x, y, zoom) to a Bing-style QuadKey string without bit masking."""
+    """ Convert tile (x, y, zoom) to a Bing-style QuadKey string
+        Top-left → 0
+        Top-right → 1
+        Bottom-left → 2
+        Bottom-right → 3
+    """
     quadkey = ""
     for i in range(zoomLevel):
         level = zoomLevel - i - 1
@@ -221,7 +236,7 @@ def tileXY_to_quadkey(zoomLevel: int, x: int, y: int) -> str:
     return quadkey
 
 def find_surrounding_tiles(lat: float, lon: float, zoomLevel: int) -> list:
-    x, y = get_tile_XY(lat, lon, zoomLevel)
+    x, y = get_tile_XY(zoomLevel, lat, lon)
     tiles = []
     for dx in [-1, 0, 1]:
         for dy in [-1, 0, 1]:
@@ -231,19 +246,81 @@ def find_surrounding_tiles(lat: float, lon: float, zoomLevel: int) -> list:
 
     return tiles
 
+def zoom_tiles():
+    x, y = get_tile_XY(zoomLevel, lat, lon)
+    return (zoomLevel + 1, x * 2, y * 2) if zoomLevel < 16 else zoomLevel
+
+    x, y = get_tile_XY(zoomLevel, lat, lon)
+    return (zoomLevel - 1, x // 2, y // 2) if zoomLevel > 0 else zoomLevel
+
+
+def update_on_zoom(mapCenter, buttonClicked: bool = False):
+    if currentZoomLevel < 10:
+       currentZoomLevelText =  "0" + str(currentZoomLevel)
+    else:
+        currentZoomLevelText = str(currentZoomLevel)
+
+    zoomLabel.text = f"Zoom Level: {currentZoomLevelText}"
+
+    if buttonClicked:
+        mapGrid.clear()
+        tileX, tileY = get_tile_XY(currentZoomLevel, mapCenter[0], mapCenter[1])
+        with mapGrid:
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    x = tileX + dx
+                    y = tileY + dy
+                    imgURL= tile_URL(currentZoomLevel, x, y, "osm")                   #print(imgURL)
+                    ui.image(imgURL).classes('w-64 h-64')  # adjust size as needed
+
+
+    #mapGrid.add_child(ui.image(tile_URL(currentZoomLevel, tileX, tileY, "osm")).classes('w-64 h-64 object-cover'))
+
+def zoom_in(zoomLevel: int) -> int:
+    return (zoomLevel + 1) if zoomLevel < 16 else zoomLevel
+
+def zoom_out(zoomLevel: int) -> int:
+    return (zoomLevel - 1) if zoomLevel > 0 else zoomLevel
+
+def on_zoom_button_click(direction):
+    global currentZoomLevel, mapCenter
+
+    if direction == IN:
+        currentZoomLevel = zoom_in(currentZoomLevel)
+    elif direction == OUT:
+        currentZoomLevel = zoom_out(currentZoomLevel)
+
+    update_on_zoom(mapCenter, True)
+
+
+
+
+def draw_line_on_map_tile(zoomLevel: int, x: int, y: int, lineStart: tuple, lineEnd: tuple, color: str = 'blue', width: int = 5):
+    base = Image.open(BytesIO(requests.get(tile_URL(zoomLevel, x, y, "osm")).content))
+    draw = ImageDraw.Draw(base)
+    draw.line((lineStart[0], lineStart[1], lineEnd[0], lineEnd[1]), fill=color, width=width)
+    base.save('overlayed.png')
+
+    return filename
+
 
 if __name__ in {"__main__", "__mp_main__"}:
     #unit_test()
-    print(tileXY_to_quadkey(16, 11764, 25713))
+    tileX, tileY = get_tile_XY(currentZoomLevel, mapCenter[0], mapCenter[1])
 
-    # Create a 3×3 grid of tiles centered on CENTER_X, CENTER_Y
-    with ui.grid(columns=3).classes('gap-0'):  # remove gaps for seamless tiling
+    # Create a 3×3 grid of tiles centered on tileX, tileY and gaps removed for seamless tiling
+    with ui.grid(columns=3).classes('gap-0') as mapGrid:
         for dy in [-1, 0, 1]:
             for dx in [-1, 0, 1]:
-                x = 94440 + dx
-                y = 205593 + dy
-                imgURL= tile_URL(16, x, y, "osm")
-                print(imgURL)
-                ui.image(imgURL).classes('w-64 h-64 object-cover')  # adjust size as needed
+                x = tileX + dx
+                y = tileY + dy
+                imgURL= tile_URL(currentZoomLevel, x, y, "osm")                   #print(imgURL)
+                ui.image(imgURL).classes('w-64 h-64')  # adjust size as needed
 
-    #ui.run()
+    with ui.row().classes('justify-center w-full'):
+        ui.button("ZOOM IN", on_click=lambda e:on_zoom_button_click(IN)).classes('w-1/3')
+        ui.button("ZOOM OUT", on_click=lambda e:on_zoom_button_click(OUT)).classes('w-1/3')
+        zoomLabel = ui.label(f"Zoom Level: {currentZoomLevel}").style('margin-top: 7px;')
+
+    update_on_zoom(mapCenter)
+    ui.run(title='Slippy Map Test', native=True, dark=True, window_size=(tile_pixel_size()*3.1, tile_pixel_size()*4))
