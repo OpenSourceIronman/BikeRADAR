@@ -2,35 +2,84 @@
 
 from nicegui import ui
 
-DEBUG_STATEMENTS_ON = True
+
+class Constant:
+    QWERTY = 1
+    DVORAK = 2
+    WINDOWS = 3
+    MAC = 4
+    DEBUG_STATEMENTS_ON = False
+    CAPS_LOCK_ON = 'CAPS_LOCK_ON'
+    MIN_WINDOW_SIZE = (1080, 300)
 
 class KeyBoard:
 
     layout = []
+    CAPS_LAYOUT_POS = 28
+    L_SHIFT_LAYOUT_POS = 41
+    R_SHIFT_LAYOUT_POS = 52
 
+    def __init__(self, type: Constant, os: Constant = None):
+        if type == Constant.QWERTY:
+            self.keys = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'DELETE','TAB', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p','[', ']', '\\', 'CAPS', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', "'", 'ENTER', 'SHIFT', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 'SHIFT', '🌐']
+        #elif type == Constant.DVORAK:
+            #self.keys = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '[', ']', 'DELETE','TAB', "'", ',', '.', 'p', 'y', 'f', 'g', 'c', 'r', 'l', '/', '=', '\\', 'CAPS', 'a', 'o', 'e', 'u', 'i', 'd', 'h', 't', 'n', 's', '-', 'ENTER', 'SHIFT', ';', 'q','j', 'k', 'x', 'b', 'm', 'w', 'v', 'z', 'R SHIFT']
 
-    def __init__(self):
-        self.keys = ['`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 'DELETE','TAB', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p','[', ']', '\\', 'CAPS', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', "'", 'ENTER', 'SHIFT', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 'R SHIFT']
-        self.shiftToggle = False
-        self.capsToggle = False
+        if os == None:
+            pass
+        elif os == Constant.WINDOWS:
+            winKeys = ['CTRL', 'WIN', 'ALT', 'SPACE', 'ALT', 'SUP', 'CTRL']
+            for key in winKeys:
+                self.keys.append(key)
+        elif os == Constant.MAC:
+            macKeys = ['CTRL', 'OPT', 'CMD', 'SPACE', 'CMD', 'OPT', 'CTRL']
+            for key in macKeys:
+                self.keys.append(key)
+
+        self.shiftToggleOn = False
+        self.capsToggleOn = False
+
+        self.modifierKeyToggleOn = {'CTRL': False, 'WIN': False, 'ALT': False, 'OPT': False, 'CMD': False, 'SUP': False}
+        self.shortcut = ''
+
         self.currentPressedKey = ''
         self.textInput = ''
 
+
     def type_key(self, key):
-        if DEBUG_STATEMENTS_ON: print(f"KEY: {self.currentPressedKey}")
+        """ Store typeable keys to self.textInput
+
+        Args:
+            key (str): The key to type
+
+        """
+        if Constant.DEBUG_STATEMENTS_ON: print(f"KEY: {self.currentPressedKey}")
 
         if key == 'DELETE':
             self.textInput = self.textInput[:-1]
-
-        if key == 'DELETE' or key == 'SHIFT' or key == 'R SHIFT' or key == 'CAPS' or key == '^^^^' or key == 'ENTER' or key == 'TAB':
+        elif key == 'ENTER':
+            self.textInput = self.textInput + '\n'
+        elif key == 'SPACE':
+            self.textInput = self.textInput + ' '
+        elif key == 'TAB':
+            self.textInput = self.textInput + '\t'
+        elif key == 'SHIFT' or key == 'CAPS' or key == Constant.CAPS_LOCK_ON:
             pass
         else:
             self.textInput = self.textInput + key
 
-        if DEBUG_STATEMENTS_ON: print(self.textInput)
+        print(f"TEXT: {self.textInput}")
 
 
-    def key_2nd_option(self, key):
+    def key_2nd_option(self, key) -> str:
+        """ Define the 2nd character option for a key
+
+        Args:
+            key (str): Key to get the 2nd character options for
+
+        Returns:
+            str: The 2nd character option for a key
+        """
         switch = {
             '`': '~',
             '1': '!',
@@ -54,27 +103,46 @@ class KeyBoard:
             '.': '>',
             '/': '?',
             'SHIFT': 'SHIFT',
-            'R SHIFT': 'R SHIFT',
             'DELETE': 'DELETE',
             'ENTER':'ENTER',
-            'CAPS': '^^^^'
+            'CAPS': Constant.CAPS_LOCK_ON
         }
 
         return switch[key]
 
+
+    def catch_modifier_keys(self, key):
+        for modifierKey in self.modifierKeyToggleOn:
+            if self.modifierKeyToggleOn[modifierKey]:
+                self.shortcut = modifierKey + key
+                self.modifierKeyToggleOn[modifierKey] = False
+
+        print(f"SHORTCUT: {self.shortcut}")
+
+        #try:
+        #    self.modifierKeyToggleOn[key] = True
+        #except KeyError:
+        #   pass
+
+
     def button_pressed(self, key):
         global layout
 
-        if key == 'CAPS' or key == '^^^^':
-            if not self.capsToggle:
-                self.capsToggle = True
-                KeyBoard.layout[28].set_text('^^^^')
-            elif self.capsToggle:
-                self.capsToggle = False
-                KeyBoard.layout[28].set_text('CAPS')
+        if key == 'CTRL' or key == 'WIN' or key == 'ALT' or key == 'SUP' or key == 'OPT' or key == 'CMD':
+            self.modifierKeyToggleOn[key] = True
 
+        if key == 'CAPS':
+            if not self.capsToggleOn:
+                self.capsToggleOn = True
+                KeyBoard.layout[KeyBoard.CAPS_LAYOUT_POS].classes('!bg-red-900')
+            elif self.capsToggleOn:
+                self.capsToggleOn = False
+                KeyBoard.layout[KeyBoard.CAPS_LAYOUT_POS].classes(remove='!bg-red-900')
 
-        if (key == 'SHIFT' or key == 'R SHIFT') and not self.shiftToggle:
+        elif key == 'SHIFT' and not self.shiftToggleOn:
+
+            KeyBoard.layout[KeyBoard.L_SHIFT_LAYOUT_POS].classes('!bg-red-900')
+            KeyBoard.layout[KeyBoard.R_SHIFT_LAYOUT_POS].classes('!bg-red-900')
 
             KeyBoard.layout[0].set_text('~')
             KeyBoard.layout[1].set_text('!')
@@ -101,16 +169,19 @@ class KeyBoard:
             KeyBoard.layout[50].set_text('>')
             KeyBoard.layout[51].set_text('?')
 
-            self.shiftToggle = True
+            self.shiftToggleOn = True
             self.currentPressedKey = key
 
-        elif self.shiftToggle:
+        elif self.shiftToggleOn:
 
             # Try / Exception handling reduces the size of switch dictionary in the key_2nd_option() function
             try:
                 self.currentPressedKey = self.key_2nd_option(key)
             except KeyError:
                 self.currentPressedKey = key.upper()
+
+            KeyBoard.layout[KeyBoard.L_SHIFT_LAYOUT_POS].classes(remove='!bg-red-900')
+            KeyBoard.layout[KeyBoard.R_SHIFT_LAYOUT_POS].classes(remove='!bg-red-900')
 
             KeyBoard.layout[0].set_text('`')
             KeyBoard.layout[1].set_text('1')
@@ -137,40 +208,57 @@ class KeyBoard:
             KeyBoard.layout[50].set_text('.')
             KeyBoard.layout[51].set_text('/')
 
-            self.shiftToggle = False
+            self.shiftToggleOn = False
 
         else:
             self.currentPressedKey = key
 
-        if self.capsToggle:
+
+        if self.capsToggleOn:
             self.currentPressedKey = key.upper()
 
-        self.type_key(self.currentPressedKey)
+        if key == '🌐':
+            emojiButtons.visible = not emojiButtons.visible
+        else:
+            self.type_key(self.currentPressedKey)
+            self.shortcut = ''
+
 
     def gui(self):
-        global text
-        with ui.row().classes('gap-[5px] w-[705px]'):
-            for key in qwerty.keys:
-                if key == '\\':
-                    css = 'w-[71px]'
-                elif key == 'SHIFT':
-                    css = 'w-[85px]'
-                elif key == 'R SHIFT':
-                    css = 'w-[140px]'
-                elif  key == 'ENTER':
-                    css = 'w-[108px]'
-                else:
-                    css = ''
+        global emojiButtons
 
-                KeyBoard.layout.append(ui.button(key, on_click=lambda e: qwerty.button_pressed(e.sender.text))
-                                    .style('font-family: "Courier New", monospace; font-weight: bold; font-size: 16px;')
-                                    .classes('!bg-blue-900' + ' ' + css))
+        with ui.row().classes('gap-4'):
 
-        text = ui.label('')
+            with ui.column().classes('gap-2'):
+                with ui.row().classes('gap-[5px] w-[705px]'):
+                    for key in qwerty.keys:
+                        if key == '\\':
+                            css = 'w-[71px]'
+                        elif key == 'SHIFT':
+                            css = 'w-[83px]'
+                        elif key == 'R SHIFT':
+                            css = 'w-[140px]'
+                        elif key == 'ENTER':
+                            css = 'w-[108px]'
+                        elif key == 'SPACE':
+                            css = 'w-[281px]'
+                        else:
+                            css = ''
 
+                        KeyBoard.layout.append(ui.button(key, on_click=lambda e: qwerty.button_pressed(e.sender.text))
+                                            .style('font-family: "Courier New", monospace; font-weight: bold; font-size: 16px;')
+                                            .classes('!bg-blue-900' + ' ' + css))
+
+            with ui.column():
+                with ui.grid(columns=6).classes("gap-[5px]") as emojiButtons:
+                    for emoji in ["😀","😊","😎","😍","🥰","😘",
+                                  "🥺","🥹","🤔","😭","😔","🫠",
+                                  "💀","😂","🤣","🙏","🫶","👍",
+                                  "✅","❤️","❤️‍🩹","💔","🔥","🎉",
+                                  "🎄","⭐","🎅","🤶","❄️","🎁"]:
+                        ui.button(emoji, on_click=lambda e: qwerty.button_pressed(e.sender.text)).style('font-family: "Courier New", monospace; font-weight: bold; font-size: 16px;').classes('!bg-blue-900 w-[40px] h-[40px] ')
 
 if __name__ in {"__main__", "__mp_main__"}:
-    qwerty = KeyBoard()
+    qwerty = KeyBoard(Constant.QWERTY, Constant.MAC)
     qwerty.gui()
-
-    ui.run(title='Virtual Keyboard', native=True, dark=True, window_size=(900, 300))
+    ui.run(title='Virtual Keyboard', native=True, dark=True, window_size=Constant.MIN_WINDOW_SIZE)

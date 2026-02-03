@@ -13,11 +13,14 @@
 # TODO: GITHUB LINK
 
 import math
+import os
 
 from nicegui import ui
 
 # 3rd party libraries
-from PIL import Image, ImageDraw  # pip install Pillow
+from PIL import Image, ImageDraw    # pip install Pillow
+import ipinfo                       # pip install ipinfo https://github.com/ipinfo/python
+from dotenv import load_dotenv
 import requests
 from io import BytesIO
 
@@ -25,9 +28,11 @@ IN = 1
 OUT = -1
 TILE_SIZE = 256
 GPS_DECIMAL_ROUNDING = 6
+STARTING_ZOOM_LEVEL = 16
 
 mapCenter = (36.149727, -115.334172)
 currentZoomLevel = 8
+
 
 def unit_test():
     assert tileXY_to_quadkey(16, 11772, 25701) == "0230130113311302"
@@ -236,6 +241,16 @@ def tileXY_to_quadkey(zoomLevel: int, x: int, y: int) -> str:
     return quadkey
 
 def find_surrounding_tiles(lat: float, lon: float, zoomLevel: int) -> list:
+    """ Determine the 8 tiles surrounding a central tile
+
+    Args:
+        lat (float): The latitude in degrees
+        lon (float): The longitude in degrees
+        zoomLevel (int): The zoom level between 0 - 19 for using the OpenStreet Map (OSM) 'standard' style
+
+    Returns:
+        list: Total of 9 tile IDs, centered on input latitude and longitude
+    """
     x, y = get_tile_XY(zoomLevel, lat, lon)
     tiles = []
     for dx in [-1, 0, 1]:
@@ -246,15 +261,18 @@ def find_surrounding_tiles(lat: float, lon: float, zoomLevel: int) -> list:
 
     return tiles
 
-def zoom_tiles():
-    x, y = get_tile_XY(zoomLevel, lat, lon)
-    return (zoomLevel + 1, x * 2, y * 2) if zoomLevel < 16 else zoomLevel
+def update_gui(mapCenter: tuple, anyButtonClicked: bool = False):
+    """ Update the GUI elements based on the current map center and button click status.
 
-    x, y = get_tile_XY(zoomLevel, lat, lon)
-    return (zoomLevel - 1, x // 2, y // 2) if zoomLevel > 0 else zoomLevel
+    Args:
+        mapCenter (tuple): The current map center coordinates (latitude, longitude).
+        actionButtonClicked (bool): Indicates whether any button was clicked to
 
+    Returns:
+        None
+    """
+    global zoomLabel
 
-def update_on_zoom(mapCenter, buttonClicked: bool = False):
     if currentZoomLevel < 10:
        currentZoomLevelText =  "0" + str(currentZoomLevel)
     else:
@@ -262,9 +280,9 @@ def update_on_zoom(mapCenter, buttonClicked: bool = False):
 
     zoomLabel.text = f"Zoom Level: {currentZoomLevelText}"
 
-    if buttonClicked:
+    if anyButtonClicked:
         mapGrid.clear()
-        tileX, tileY = get_tile_XY(currentZoomLevel, mapCenter[0], mapCenter[1])
+        tileX, tileY = get_tile_XY(10, mapCenter[0], mapCenter[1])
         with mapGrid:
             for dy in [-1, 0, 1]:
                 for dx in [-1, 0, 1]:
@@ -273,16 +291,41 @@ def update_on_zoom(mapCenter, buttonClicked: bool = False):
                     imgURL= tile_URL(currentZoomLevel, x, y, "osm")                   #print(imgURL)
                     ui.image(imgURL).classes('w-64 h-64')  # adjust size as needed
 
-
-    #mapGrid.add_child(ui.image(tile_URL(currentZoomLevel, tileX, tileY, "osm")).classes('w-64 h-64 object-cover'))
+#def zoom_tiles():
+#    x, y = get_tile_XY(zoomLevel, lat, lon)
+#    return (zoomLevel + 1, x * 2, y * 2) if zoomLevel < 16 else zoomLevel
+#
+#    x, y = get_tile_XY(zoomLevel, lat, lon)
+#    return (zoomLevel - 1, x // 2, y // 2) if zoomLevel > 0 else zoomLevel
 
 def zoom_in(zoomLevel: int) -> int:
+    """ Increase the zoom level by one if it is less than 16 (Max value for OpenStreet Map (OSM) 'standard' style)
+
+    Args:
+        zoomLevel (int): The current zoom level.
+
+    Returns:
+        int: The new zoom level.
+    """
     return (zoomLevel + 1) if zoomLevel < 16 else zoomLevel
 
 def zoom_out(zoomLevel: int) -> int:
+    """ Decrease the zoom level by one if it is greater than 0 (Min value for OpenStreet Map (OSM) 'standard' style)
+
+    Args:
+        zoomLevel (int): The current zoom level.
+
+    Returns:
+        int: The new zoom level.
+    """
     return (zoomLevel - 1) if zoomLevel > 0 else zoomLevel
 
 def on_zoom_button_click(direction):
+    """ Handle both in and out zoom button click event and update the GUI.
+
+    Args:
+        direction (str): The direction to zoom on a button click ('IN' or 'OUT').
+    """
     global currentZoomLevel, mapCenter
 
     if direction == IN:
@@ -290,10 +333,26 @@ def on_zoom_button_click(direction):
     elif direction == OUT:
         currentZoomLevel = zoom_out(currentZoomLevel)
 
-    update_on_zoom(mapCenter, True)
+    update_gui(mapCenter, True)
 
+def get_server_location():
+    """ Get the server location using IPinfo API
 
+    Returns:
+        tuple: Latitude and Longitude of the server location
+    """
+    load_dotenv()
+    ipLocationAccessToken = os.getenv("IP_LOCATION_ACCESS_TOKEN")
+    handler = ipinfo.getHandler(ipLocationAccessToken)
+    response = requests.get('https://ipinfo.io/json')
+    data = response.json()
+    lat, lon = map(float, data['loc'].split(','))
+    print(f"Server Location: Latitude {lat}, Longitude {lon}")
+    #print(details.hostname)
+    mapCenter = (lat, lon)
+    #update_gui(mapCenter)
 
+    return (lat, lon)
 
 def draw_line_on_map_tile(zoomLevel: int, x: int, y: int, lineStart: tuple, lineEnd: tuple, color: str = 'blue', width: int = 5):
     base = Image.open(BytesIO(requests.get(tile_URL(zoomLevel, x, y, "osm")).content))
@@ -306,6 +365,8 @@ def draw_line_on_map_tile(zoomLevel: int, x: int, y: int, lineStart: tuple, line
 
 if __name__ in {"__main__", "__mp_main__"}:
     #unit_test()
+
+    mapCenter = get_server_location()
     tileX, tileY = get_tile_XY(currentZoomLevel, mapCenter[0], mapCenter[1])
 
     # Create a 3×3 grid of tiles centered on tileX, tileY and gaps removed for seamless tiling
@@ -322,5 +383,11 @@ if __name__ in {"__main__", "__mp_main__"}:
         ui.button("ZOOM OUT", on_click=lambda e:on_zoom_button_click(OUT)).classes('w-1/3')
         zoomLabel = ui.label(f"Zoom Level: {currentZoomLevel}").style('margin-top: 7px;')
 
-    update_on_zoom(mapCenter)
+    with ui.row().classes('justify-center w-full'):
+        ui.input(label='Recenter Latitude', placeholder='Enter Latitude -85.0 to 85.0',
+                 on_change=lambda e: result.set_text('you typed: ' + e.value),
+                 validation={'Input too long': lambda value: len(value) <= 9})
+        ui.button('Recenter Map On My Location', on_click=lambda e: get_server_location())
+
+    update_gui(mapCenter)
     ui.run(title='Slippy Map Test', native=True, dark=True, window_size=(tile_pixel_size()*3.1, tile_pixel_size()*4))
